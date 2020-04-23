@@ -81,7 +81,8 @@ int main (int argc, char *argv[])
 	memset(share, 0, sizeof(so_t));
 	rfile = fopen((char *) argv[1], "r");
 	if (rfile == NULL) {
-		perror("rfile");
+		printf("usage: ./prod_cons <readfile> #Producer #Consumer\n");
+		perror("readfile is missing");
 		exit(0);
 	}
 	if (argv[2] != NULL) {
