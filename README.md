@@ -1,7 +1,7 @@
 # 2020_os_hw2
 HW2: Multi-threaded word count
 
-**Due date: May 3rd**
+**Due date: May 9th**
 
 The second homework is about multi-thread programming with some synchronization.
 Thread is a unit of execution; a thread has execution context, 
