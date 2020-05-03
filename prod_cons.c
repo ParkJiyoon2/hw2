@@ -12,6 +12,8 @@ typedef struct sharedobject {
 	int full;
 } so_t;
 
+int flag = 0;
+
 void *producer(void *arg) {
 	so_t *so = arg;
 	int *ret = malloc(sizeof(int));
@@ -20,22 +22,28 @@ void *producer(void *arg) {
 	char *line = NULL;
 	size_t len = 0;
 	ssize_t read = 0;
-
+	
 	while (1) {
+		if(flag==1) continue;
 		read = getdelim(&line, &len, '\n', rfile);
 		if (read == -1) {
 			so->full = 1;
 			so->line = NULL;
 			break;
 		}
+		pthread_mutex_lock(&so->lock);
 		so->linenum = i;
-		so->line = strdup(line);      /* share the line */
-		i++;
+		so->line = strdup(line);
+	  	i++;	/* share the line */
+		flag = 1;
+		pthread_mutex_unlock(&so->lock);
+
 		so->full = 1;
 	}
 	free(line);
 	printf("Prod_%x: %d lines\n", (unsigned int)pthread_self(), i);
 	*ret = i;
+	flag = 1;
 	pthread_exit(ret);
 }
 
@@ -47,6 +55,8 @@ void *consumer(void *arg) {
 	char *line;
 
 	while (1) {
+		if(flag==0) continue;
+		pthread_mutex_unlock(&so->lock);
 		line = so->line;
 		if (line == NULL) {
 			break;
@@ -54,12 +64,16 @@ void *consumer(void *arg) {
 		len = strlen(line);
 		printf("Cons_%x: [%02d:%02d] %s",
 			(unsigned int)pthread_self(), i, so->linenum, line);
+		flag = 0;
 		free(so->line);
 		i++;
+		pthread_mutex_unlock(&so->lock);
 		so->full = 0;
 	}
+	
 	printf("Cons: %d lines\n", i);
 	*ret = i;
+	flag = 0;
 	pthread_exit(ret);
 }
 
