@@ -13,7 +13,7 @@ typedef struct sharedobject {
 	int full;
 	int buf_full[100];
 	int num_of_empty;    //empty된 갯수
-	   //선언된 Consumer의 갯수
+	
 } so_t;
 
 
@@ -34,12 +34,11 @@ void *producer(void *arg) {
 		read = getdelim(&line, &len, '\n', rfile);
 		pthread_mutex_lock(&so->lock);
 		while(so->full == 1){
-			pthread_cond_wait(&so->cv, &so->lock);
+			pthread_cond_wait(&so->cv, &so->lock);//대기
 		}
 
-		if (read == -1) {
-			so->full = 1;
-			
+		if (read == -1) {//파일의 끝
+			so->full = 1;	
 			so->buf_full[0] = 1;
 			so->line[i] = NULL;
 			P_last = 1;
@@ -49,14 +48,14 @@ void *producer(void *arg) {
 			break;
 		}
 		so->linenum = i;
-		so->line[target] = strdup(line);      /* share the line */
+		so->line[target] = strdup(line);   //입력받은 한줄을 저장
 		i++;
-		so->buf_full[target] = 1;
+		so->buf_full[target] = 1;//target번의 버퍼(라인)이 이미 차있음을 보여줌
 		target++;
-		if(target == 1){
+		if(target == 1){//버퍼가 차있으면
 			target = 0;
-			so->full = 1;
-			pthread_cond_broadcast(&so->cv);
+			so->full = 1;//full임을 저장하고
+			pthread_cond_broadcast(&so->cv);//wait하고 있는 스레드를 깨운다
 		}
 		pthread_cond_signal(&so->cv);
 		pthread_mutex_unlock(&so->lock);
@@ -79,8 +78,8 @@ void *consumer(void *arg) {
 
 	pthread_mutex_lock(&so->lock);
 	target = 0;
-      		//버퍼 지정
-	printf("TARGET BUF %x : %d\n", (unsigned int)pthread_self(), target);  //버퍼 지정 잘 됐나 확인.
+      
+	printf("TARGET BUF %x : %d\n", (unsigned int)pthread_self(), target);  
 	pthread_mutex_unlock(&so->lock);
 
 	while (1) {
@@ -97,8 +96,7 @@ void *consumer(void *arg) {
 			break;
 		}
 		len = strlen(line);
-		printf("Cons_%x: [%02d:%02d] %s",
-			(unsigned int)pthread_self(), i, so->linenum, line);
+		printf("Cons_%x: [%02d:%02d] %s",(unsigned int)pthread_self(), i, so->linenum, line);
 		free(so->line[target]);
 		so->line[target] = NULL;
 		i++;

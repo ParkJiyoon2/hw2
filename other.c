@@ -7,7 +7,7 @@
 typedef struct sharedobject {
 	FILE *rfile;
 	int linenum;
-	char *line[100];   //main 함수에서 쓰레드로 쓸 수 있는 갯수의 총계가 100;
+	char *All_line[100];   //
 	pthread_mutex_t lock;
 	pthread_cond_t cv;
 	int full;
@@ -17,8 +17,8 @@ typedef struct sharedobject {
 } so_t;
 
 
-int C_index;
-int P_last;
+int C_index;//Consumer번호
+int p_end; //Producer가 끝났는지
 
 void *producer(void *arg) {
 	so_t *so = arg;
@@ -28,42 +28,40 @@ void *producer(void *arg) {
 	char *line = NULL;
 	size_t len = 0;
 	ssize_t read = 0;
-	int target = 0;
+	int ConsNum = 0;
 
 
 	while (1) {
-		read = getdelim(&line, &len, '\n', rfile);
+		read = getdelim(&line, &len, '\n', rfile);//엔터 단위로 line을 나눠서 받음
 		pthread_mutex_lock(&so->lock);
 		while(so->full == 1){
-			pthread_cond_wait(&so->cv, &so->lock);
+			pthread_cond_wait(&so->cv, &so->lock);//컨슈머가 소비할때까지 대기
 		}
 
-		if (read == -1) {
+		if (read == -1) {//파일 끝
 			so->full = 1;
 			for(int i = 0; i < C_index; i++ ){
 				so->buf_full[i] = 1;
 			}
-			so->line[i] = NULL;
-			P_last = 1;
+			so->All_line[i] = NULL;
+			p_end = 1;
 
 			pthread_cond_broadcast(&so->cv);
 			pthread_mutex_unlock(&so->lock);
 			break;
 		}
-		so->linenum = i;
-		so->line[target] = strdup(line);      /* share the line */
-		i++;
-		so->buf_full[target] = 1;
-		target++;
-		if(target == so->C_num){
-			target = 0;
+		so->linenum = i;i++;
+		so->All_line[ConsNum] = strdup(line);      // 공유버퍼에 문자열 넣기 
+		so->buf_full[ConsNum] = 1;//차있음을 표시
+		ConsNum++;
+		if(ConsNum == so->C_num){
+			ConsNum = 0;
 			so->full = 1;
 			pthread_cond_broadcast(&so->cv);
 		}
 		pthread_cond_signal(&so->cv);
 		pthread_mutex_unlock(&so->lock);
 	}
-
 	free(line);
 	printf("Prod_%x: %d lines\n", (unsigned int)pthread_self(), i);
 	*ret = i;
@@ -76,50 +74,49 @@ void *consumer(void *arg) {
 	int i = 0;
 	int len;
 	char *line;
-	int target = 0;
-
+	int ConsNum = 0;
 
 	pthread_mutex_lock(&so->lock);
-	target = C_index++;
-      	printf("C_index=%d target=%d\n",C_index,target);
+	ConsNum = C_index++;
+      	printf("C_index=%d ConsNum=%d\n",C_index,ConsNum);
 		//버퍼 지정
-	printf("TARGET BUF %x : %d\n", (unsigned int)pthread_self(), target);  //버퍼 지정 잘 됐나 확인.
+	printf("TARGET BUF %x : %d\n", (unsigned int)pthread_self(), ConsNum);  //버퍼 지정 잘 됐나 확인.
 	pthread_mutex_unlock(&so->lock);
 
 	while (1) {
 		pthread_mutex_lock(&so->lock);
-		line = so->line[target];
-		while(line == NULL && so->buf_full[target] == 0){
+		line = so->All_line[ConsNum];
+		while(line == NULL && so->buf_full[ConsNum] == 0){
 			pthread_cond_wait(&so->cv, &so->lock);
 		}
 
-		line = so->line[target];
+		line = so->All_line[ConsNum];
 		if (line == NULL) {
 			pthread_cond_broadcast(&so->cv);
 			pthread_mutex_unlock(&so->lock);
 			break;
 		}
-		len = strlen(line);
-		printf("Cons_%x: [%02d:%02d] %s",
-			(unsigned int)pthread_self(), i, so->linenum, line);
-		free(so->line[target]);
-		so->line[target] = NULL;
-		i++;
-		so->buf_full[target] = 0;
+		len = strlen(line);//문자열길이
+		printf("Cons_%x: [%02d:%02d] %s",(unsigned int)pthread_self(), i, so->linenum, line);
+		//n개의 컨슈머가 n개의 line을 프린트 했으므로
+		free(so->All_line[ConsNum]);
+		so->All_line[ConsNum] = NULL;//풀어주기
+		i++;//현재 위치의 줄
+		so->buf_full[ConsNum] = 0;
 		so->num_of_empty++;
 
-		if(so->num_of_empty == so->C_num)
+		if(so->num_of_empty == so->C_num)//빈 버퍼가 컨슈머 개수가 되면 초기화
 		{
 			so->num_of_empty = 0;
-			so->full = 0;
+			so->full = 0;//전부 출력했으므로 full초기화
 		}
 
-		if(P_last == 1){
+		if(p_end == 1){//producer입력 종료
+			printf("producer end\n");
 			pthread_cond_broadcast(&so->cv);
 			pthread_mutex_unlock(&so->lock);
 			break;
 		}
-
 
 		pthread_cond_broadcast(&so->cv);
 		pthread_mutex_unlock(&so->lock);
