@@ -7,10 +7,17 @@
 typedef struct sharedobject {
 	FILE *rfile;
 	int linenum;
-	char *line;
+	char *line[100];   //main 함수에서 쓰레드로 쓸 수 있는 갯수의 총계가 100;
 	pthread_mutex_t lock;
+	pthread_cond_t cv;
 	int full;
+	int buf_full[100];
+	int num_of_empty;    //empty된 갯수
+	   //선언된 Consumer의 갯수
 } so_t;
+
+
+int P_last;
 
 void *producer(void *arg) {
 	so_t *so = arg;
@@ -20,19 +27,41 @@ void *producer(void *arg) {
 	char *line = NULL;
 	size_t len = 0;
 	ssize_t read = 0;
+	int target = 0;
+
 
 	while (1) {
 		read = getdelim(&line, &len, '\n', rfile);
+		pthread_mutex_lock(&so->lock);
+		while(so->full == 1){
+			pthread_cond_wait(&so->cv, &so->lock);
+		}
+
 		if (read == -1) {
 			so->full = 1;
-			so->line = NULL;
+			
+			so->buf_full[0] = 1;
+			so->line[i] = NULL;
+			P_last = 1;
+
+			pthread_cond_broadcast(&so->cv);
+			pthread_mutex_unlock(&so->lock);
 			break;
 		}
 		so->linenum = i;
-		so->line = strdup(line);      /* share the line */
+		so->line[target] = strdup(line);      /* share the line */
 		i++;
-		so->full = 1;
+		so->buf_full[target] = 1;
+		target++;
+		if(target == 1){
+			target = 0;
+			so->full = 1;
+			pthread_cond_broadcast(&so->cv);
+		}
+		pthread_cond_signal(&so->cv);
+		pthread_mutex_unlock(&so->lock);
 	}
+
 	free(line);
 	printf("Prod_%x: %d lines\n", (unsigned int)pthread_self(), i);
 	*ret = i;
@@ -45,20 +74,54 @@ void *consumer(void *arg) {
 	int i = 0;
 	int len;
 	char *line;
+	int target = 0;
+
+
+	pthread_mutex_lock(&so->lock);
+	target = 0;
+      		//버퍼 지정
+	printf("TARGET BUF %x : %d\n", (unsigned int)pthread_self(), target);  //버퍼 지정 잘 됐나 확인.
+	pthread_mutex_unlock(&so->lock);
 
 	while (1) {
-		line = so->line;
+		pthread_mutex_lock(&so->lock);
+		line = so->line[target];
+		while(line == NULL && so->buf_full[target] == 0){
+			pthread_cond_wait(&so->cv, &so->lock);
+		}
+
+		line = so->line[target];
 		if (line == NULL) {
+			pthread_cond_broadcast(&so->cv);
+			pthread_mutex_unlock(&so->lock);
 			break;
 		}
 		len = strlen(line);
 		printf("Cons_%x: [%02d:%02d] %s",
 			(unsigned int)pthread_self(), i, so->linenum, line);
-		free(so->line);
-		printf("this line is %s\n",line);
+		free(so->line[target]);
+		so->line[target] = NULL;
 		i++;
-		so->full = 0;
+		so->buf_full[target] = 0;
+		so->num_of_empty++;
+
+		if(so->num_of_empty == 1)
+		{
+			so->num_of_empty = 0;
+			so->full = 0;
+		}
+
+		if(P_last == 1){
+			pthread_cond_broadcast(&so->cv);
+			pthread_mutex_unlock(&so->lock);
+			break;
+		}
+
+
+		pthread_cond_broadcast(&so->cv);
+		pthread_mutex_unlock(&so->lock);
 	}
+
 	printf("Cons: %d lines\n", i);
 	*ret = i;
 	pthread_exit(ret);
@@ -82,7 +145,7 @@ int main (int argc, char *argv[])
 	memset(share, 0, sizeof(so_t));
 	rfile = fopen((char *) argv[1], "r");
 	if (rfile == NULL) {
-		perror("Warning: No rfile");
+		perror("rfile");
 		exit(0);
 	}
 	if (argv[2] != NULL) {
@@ -96,24 +159,25 @@ int main (int argc, char *argv[])
 		if (Ncons == 0) Ncons = 1;
 	} else Ncons = 1;
 
-	share->rfile = rfile;
-	share->line = NULL;
-	pthread_mutex_init(&share->lock, NULL);
-	for (i = 0 ; i < Nprod ; i++)
-		pthread_create(&prod[i], NULL, producer, share);
-	for (i = 0 ; i < Ncons ; i++)
-		pthread_create(&cons[i], NULL, consumer, share);
-	printf("------------------main continuing--------\n");
+	
 
-	for (i = 0 ; i < Ncons ; i++) {
+	share->rfile = rfile;
+	pthread_mutex_init(&share->lock, NULL);
+	pthread_cond_init(&share->cv, NULL);
+	for (i = 0 ; i < 1 ; i++)
+		pthread_create(&prod[i], NULL, producer, share);
+	for (i = 0 ; i < 1 ; i++)
+		pthread_create(&cons[i], NULL, consumer, share);
+	printf("main continuing\n");
+
+	for (i = 0 ; i < 1 ; i++) {
 		rc = pthread_join(cons[i], (void **) &ret);
 		printf("main: consumer_%d joined with %d\n", i, *ret);
 	}
-	for (i = 0 ; i < Nprod ; i++) {
+	for (i = 0 ; i < 1 ; i++) {
 		rc = pthread_join(prod[i], (void **) &ret);
 		printf("main: producer_%d joined with %d\n", i, *ret);
 	}
 	pthread_exit(NULL);
 	exit(0);
 }
-

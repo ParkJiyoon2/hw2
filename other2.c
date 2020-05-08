@@ -3,12 +3,14 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/time.h>
 
 typedef struct sharedobject {
 	FILE *rfile;
 	int linenum;
 	char *line;
 	pthread_mutex_t lock;
+	pthread_cond_t cv;
 	int full;
 } so_t;
 
@@ -22,16 +24,42 @@ void *producer(void *arg) {
 	ssize_t read = 0;
 
 	while (1) {
+		// 개행할때까지 읽어들임
+		// end of file이면 -1 반환
 		read = getdelim(&line, &len, '\n', rfile);
-		if (read == -1) {
+
+		pthread_mutex_lock(&so->lock);
+
+		// 처음 실행시 false
+		// 그후 다시 producer실행했으면 밑에서full=1해줬기 떄문에 consumer먼저 실행되도록 wait
+		 while(so->full == 1)
+                {
+                        // consumer가 깨우도록함
+                        pthread_cond_wait(&so->cv, &so->lock);
+                }
+
+
+		if (read == -1) { // eof condition
 			so->full = 1;
 			so->line = NULL;
+
+			pthread_cond_signal(&so->cv);
+			pthread_mutex_unlock(&so->lock);
 			break;
 		}
+		// buffer 비어있으면 shared buffer에 line 올림
+		
+		// buffer full, lock
 		so->linenum = i;
 		so->line = strdup(line);      /* share the line */
 		i++;
+
+		// producer job completed
 		so->full = 1;
+
+		pthread_cond_signal(&so->cv);
+
+		pthread_mutex_unlock(&so->lock);
 	}
 	free(line);
 	printf("Prod_%x: %d lines\n", (unsigned int)pthread_self(), i);
@@ -47,17 +75,36 @@ void *consumer(void *arg) {
 	char *line;
 
 	while (1) {
-		line = so->line;
-		if (line == NULL) {
-			break;
+		// shared access, lock
+		pthread_mutex_lock(&so->lock);
+
+		//consumer는 buffer가 비어있으면 동작불가
+		//consumer waits until buffer is full
+		while(so->full == 0) 
+		{
+			pthread_cond_wait(&so->cv, &so->lock);
 		}
-		len = strlen(line);
+
+		//now, buffer is full
+		//mutex lock is hold
+
+		line = so->line; // shared line 읽고
+		if (line == NULL) {
+			pthread_cond_signal(&so->cv);
+			pthread_mutex_unlock(&so->lock);
+			break; // 비었으면 break
+		}
+		//len = strlen(line);
 		printf("Cons_%x: [%02d:%02d] %s",
 			(unsigned int)pthread_self(), i, so->linenum, line);
 		free(so->line);
-		printf("this line is %s\n",line);
 		i++;
+		
+		//consumer job complete
+
 		so->full = 0;
+		pthread_cond_signal(&so->cv);
+		pthread_mutex_unlock(&so->lock);
 	}
 	printf("Cons: %d lines\n", i);
 	*ret = i;
@@ -74,6 +121,10 @@ int main (int argc, char *argv[])
 	int *ret;
 	int i;
 	FILE *rfile;
+
+	// time val
+	struct timeval start, end;
+
 	if (argc == 1) {
 		printf("usage: ./prod_cons <readfile> #Producer #Consumer\n");
 		exit (0);
@@ -82,7 +133,7 @@ int main (int argc, char *argv[])
 	memset(share, 0, sizeof(so_t));
 	rfile = fopen((char *) argv[1], "r");
 	if (rfile == NULL) {
-		perror("Warning: No rfile");
+		perror("rfile");
 		exit(0);
 	}
 	if (argv[2] != NULL) {
@@ -95,15 +146,20 @@ int main (int argc, char *argv[])
 		if (Ncons > 100) Ncons = 100;
 		if (Ncons == 0) Ncons = 1;
 	} else Ncons = 1;
-
+	
 	share->rfile = rfile;
 	share->line = NULL;
 	pthread_mutex_init(&share->lock, NULL);
-	for (i = 0 ; i < Nprod ; i++)
-		pthread_create(&prod[i], NULL, producer, share);
-	for (i = 0 ; i < Ncons ; i++)
-		pthread_create(&cons[i], NULL, consumer, share);
-	printf("------------------main continuing--------\n");
+	pthread_cond_init(&share->cv, NULL);
+	
+	// time
+	gettimeofday(&start, NULL);
+	
+	
+		pthread_create(&prod[0], NULL, producer, share);
+	
+		pthread_create(&cons[0], NULL, consumer, share);
+	printf("main continuing\n");
 
 	for (i = 0 ; i < Ncons ; i++) {
 		rc = pthread_join(cons[i], (void **) &ret);
@@ -113,7 +169,11 @@ int main (int argc, char *argv[])
 		rc = pthread_join(prod[i], (void **) &ret);
 		printf("main: producer_%d joined with %d\n", i, *ret);
 	}
+
+	// time
+	gettimeofday(&end, NULL);
+	printf("due time : %ld:%ld\n", end.tv_sec - start.tv_sec, end.tv_usec - start.tv_usec);
+
 	pthread_exit(NULL);
 	exit(0);
 }
-
